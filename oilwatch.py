@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
+import csv
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-from io import BytesIO
+from io import BytesIO, StringIO
 
 FILE_ID = "1KEbgg2u3FSMRIMcrEBTDeYW0qzTnpICH"
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
@@ -27,32 +28,29 @@ def load_csv_from_drive(file_id: str) -> pd.DataFrame:
     while not done:
         _, done = downloader.next_chunk()
 
-    fh.seek(0)
     raw = fh.getvalue()
-
     encodings = ["utf-8", "cp1252", "latin1"]
-    seps = [",", ";", "\t", "|"]
 
     for enc in encodings:
-        for sep in seps:
+        try:
+            text = raw.decode(enc)
+            sample = "\n".join(text.splitlines()[:30])
             try:
-                text = raw.decode(enc)
-                return pd.read_csv(
-                    BytesIO(text.encode("utf-8")),
-                    sep=sep,
-                    engine="python",
-                    on_bad_lines="skip",
-                )
-            except (UnicodeDecodeError, pd.errors.ParserError):
-                pass
+                dialect = csv.Sniffer().sniff(sample, delimiters=[",", ";", "\t", "|"])
+                sep = dialect.delimiter
+            except Exception:
+                sep = None
+
+            if sep is None:
+                return pd.read_csv(StringIO(text), engine="python", sep=None, on_bad_lines="skip")
+            else:
+                return pd.read_csv(StringIO(text), engine="python", sep=sep, on_bad_lines="skip")
+        except UnicodeDecodeError:
+            continue
 
     text = raw.decode("latin1", errors="replace")
-    return pd.read_csv(
-        BytesIO(text.encode("utf-8")),
-        sep=",",
-        engine="python",
-        on_bad_lines="skip",
-    )
+    return pd.read_csv(StringIO(text), engine="python", sep=None, on_bad_lines="skip")
+
 
 st.write("Loading financial data from Google Drive...")
 
