@@ -44,8 +44,7 @@ def load_csv_from_drive(file_id: str) -> pd.DataFrame:
 
             if sep is None:
                 return pd.read_csv(StringIO(text), engine="python", sep=None, on_bad_lines="skip")
-            else:
-                return pd.read_csv(StringIO(text), engine="python", sep=sep, on_bad_lines="skip")
+            return pd.read_csv(StringIO(text), engine="python", sep=sep, on_bad_lines="skip")
         except UnicodeDecodeError:
             continue
 
@@ -57,32 +56,91 @@ st.write("Loading financial data from Google Drive...")
 
 try:
     df = load_csv_from_drive(FILE_ID)
+
     st.success(f"CSV loaded successfully. Rows: {len(df):,} | Columns: {len(df.columns):,}")
     st.dataframe(df, use_container_width=True)
 
     st.divider()
+    st.header("Graphics")
 
+    all_cols = df.columns.tolist()
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
-    cat_cols = df.select_dtypes(exclude="number").columns.tolist()
+    text_cols = df.select_dtypes(exclude="number").columns.tolist()
 
-    if numeric_cols:
-        st.subheader("Numeric Columns")
-        st.bar_chart(df[numeric_cols].head(50))
+    left, right = st.columns(2)
 
-    if len(numeric_cols) >= 2:
+    with left:
+        st.subheader("Bar / Line / Area")
+        chart_type = st.selectbox("Chart type", ["Bar", "Line", "Area"], key="chart_type")
+        x_col = st.selectbox("X axis", all_cols, key="x_col")
+
+        y_candidates = numeric_cols if numeric_cols else all_cols
+        y_col = st.selectbox("Y axis", y_candidates, key="y_col")
+
+        chart_df = df[[x_col, y_col]].dropna().copy()
+
+        if chart_type == "Bar":
+            fig = px.bar(chart_df, x=x_col, y=y_col, title=f"{y_col} by {x_col}")
+        elif chart_type == "Line":
+            fig = px.line(chart_df, x=x_col, y=y_col, title=f"{y_col} over {x_col}")
+        else:
+            fig = px.area(chart_df, x=x_col, y=y_col, title=f"{y_col} over {x_col}")
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    with right:
         st.subheader("Scatter Plot")
-        fig = px.scatter(df, x=numeric_cols[0], y=numeric_cols[1], title=f"{numeric_cols[0]} vs {numeric_cols[1]}")
-        st.plotly_chart(fig, use_container_width=True)
+        if len(numeric_cols) >= 2:
+            x_scatter = st.selectbox("Scatter X", numeric_cols, index=0, key="scatter_x")
+            y_scatter = st.selectbox("Scatter Y", numeric_cols, index=1, key="scatter_y")
+            color_col = st.selectbox(
+                "Color by",
+                ["(none)"] + text_cols,
+                key="scatter_color"
+            )
 
-    if numeric_cols and cat_cols:
-        st.subheader("Category vs Value")
-        group_col = cat_cols[0]
-        value_col = numeric_cols[0]
-        summary = df.groupby(group_col, dropna=False)[value_col].sum().reset_index()
-        summary = summary.sort_values(value_col, ascending=False).head(20)
+            scatter_df = df[[x_scatter, y_scatter] + ([color_col] if color_col != "(none)" else [])].dropna()
 
-        fig = px.bar(summary, x=group_col, y=value_col, title=f"Top {group_col} by {value_col}")
-        st.plotly_chart(fig, use_container_width=True)
+            if color_col == "(none)":
+                fig2 = px.scatter(scatter_df, x=x_scatter, y=y_scatter, title=f"{x_scatter} vs {y_scatter}")
+            else:
+                fig2 = px.scatter(
+                    scatter_df,
+                    x=x_scatter,
+                    y=y_scatter,
+                    color=color_col,
+                    title=f"{x_scatter} vs {y_scatter}"
+                )
+
+            st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info("Need at least two numeric columns for a scatter plot.")
+
+    st.divider()
+    st.header("Summary Charts")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.subheader("Column Counts")
+        count_col = st.selectbox(
+            "Choose a category column",
+            text_cols if text_cols else all_cols,
+            key="count_col"
+        )
+        counts = df[count_col].astype(str).value_counts().head(20).reset_index()
+        counts.columns = [count_col, "Count"]
+        fig3 = px.bar(counts, x=count_col, y="Count", title=f"Top 20 values in {count_col}")
+        st.plotly_chart(fig3, use_container_width=True)
+
+    with c2:
+        st.subheader("Numeric Summary")
+        if numeric_cols:
+            summary_col = st.selectbox("Choose numeric column", numeric_cols, key="summary_col")
+            fig4 = px.histogram(df, x=summary_col, nbins=30, title=f"Distribution of {summary_col}")
+            st.plotly_chart(fig4, use_container_width=True)
+        else:
+            st.info("No numeric columns found for histogram.")
 
 except KeyError:
     st.error(
