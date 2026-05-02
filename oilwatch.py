@@ -349,13 +349,17 @@ with tab1:
         df["Month"] = df["Date"].dt.strftime("%b")
 
         now = datetime.now()
+        shifted_current = now.replace(day=1) - timedelta(days=1)
+        shifted_last = shifted_current.replace(day=1) - timedelta(days=1)
+
         current_year = now.year
-        last_start, last_end = last_month_bounds(now)
-        cur_start, cur_end = month_bounds(current_year, now.month)
+        cur_start, cur_end = month_bounds(shifted_current.year, shifted_current.month)
+        last_start, last_end = month_bounds(shifted_last.year, shifted_last.month)
         year_start = datetime(current_year, 1, 1)
         year_end = datetime(current_year, 12, 31)
 
         company_choice = sidebar_company_choice
+
         view_df = filter_company(df, company_choice)
         view_current_month = view_df[(view_df["Date"] >= cur_start) & (view_df["Date"] <= cur_end)]
         view_last_month = view_df[(view_df["Date"] >= last_start) & (view_df["Date"] <= last_end)]
