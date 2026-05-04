@@ -57,7 +57,8 @@ st.markdown(
 FILE_ID = "1KEbgg2u3FSMRIMcrEBTDeYW0qzTnpICH"
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
-COMPANY_NAMES = ["TFM", "Transformer Oil Lab", "Oilwatch Lubricating Laboratory"]
+TRANSFORMER_NAMES = ["TFM", "Transformer Oil Lab", "Oilwatch Lubricating Laboratory"]
+
 MONTH_MAP = {
     1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
     7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
@@ -171,7 +172,7 @@ def load_data_from_drive():
 
     df = df[["Date", "Montly Sales", "Company", "Customer Name"]]
     df = df.dropna(subset=["Date"])
-    return df[df["Company"].isin(COMPANY_NAMES)].copy()
+    return df[df["Company"].isin(TRANSFORMER_NAMES)].copy()
 
 def money_frame(df):
     out = df.copy()
@@ -318,18 +319,12 @@ def show_grouped_bar_last_3_years(comp_df):
     ax.yaxis.offsetText.set_visible(False)
     st.pyplot(fig, clear_figure=True)
 
-@st.cache_data(ttl=600)
-def cached_df():
-    return load_data_from_drive()
-
-df = cached_df()
+df = load_data_from_drive()
 st.sidebar.success(f"Rows loaded: {len(df)}")
-
 tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "🏆 Top Customers", "📁 Data"])
 
 with tab1:
     st.markdown('<div class="section-title">Dashboard</div>', unsafe_allow_html=True)
-
     if df.empty:
         st.info("No data loaded.")
     else:
@@ -373,7 +368,6 @@ with tab1:
 
 with tab2:
     st.markdown('<div class="section-title">Top Customers</div>', unsafe_allow_html=True)
-
     if df.empty:
         st.info("No data loaded.")
     else:
