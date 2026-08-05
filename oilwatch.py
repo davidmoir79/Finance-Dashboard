@@ -124,44 +124,57 @@ def clean_sales(value):
 
 @st.cache_data(ttl=600)
 def load_data_from_drive():
-    creds = Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
-        scopes=SCOPES,
-    )
-    service = build("drive", "v3", credentials=creds)
-    request = service.files().get_media(fileId=FILE_ID)
+    try:
+        # Load and sanitize Google Cloud credentials
+        service_account_info = dict(st.secrets["gcp_service_account"])
+        if "private_key" in service_account_info:
+            service_account_info["private_key"] = service_account_info["private_key"].replace("\\n", "\n")
 
-    fh = BytesIO()
-    downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
+        creds = Credentials.from_service_account_info(
+            service_account_info,
+            scopes=SCOPES,
+        )
+        service = build("drive", "v3", credentials=creds)
+        request = service.files().get_media(fileId=FILE_ID)
 
-    raw = fh.getvalue()
-    encodings = ["utf-8", "cp1252", "latin1", "iso-8859-1"]
+        fh = BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
 
-    df = None
-    for enc in encodings:
-        try:
-            text = raw.decode(enc)
-            sample = "\n".join(text.splitlines()[:30])
+        raw = fh.getvalue()
+        encodings = ["utf-8", "cp1252", "latin1", "iso-8859-1"]
+
+        df = None
+        for enc in encodings:
             try:
-                dialect = csv.Sniffer().sniff(sample, delimiters=[",", ";", "\t", "|"])
-                sep = dialect.delimiter
-            except Exception:
-                sep = ";"
-            df = pd.read_csv(StringIO(text), engine="python", sep=sep, on_bad_lines="skip")
-            break
-        except UnicodeDecodeError:
-            continue
+                text = raw.decode(enc)
+                sample = "\n".join(text.splitlines()[:30])
+                try:
+                    dialect = csv.Sniffer().sniff(sample, delimiters=[",", ";", "\t", "|"])
+                    sep = dialect.delimiter
+                except Exception:
+                    sep = ";"
+                df = pd.read_csv(StringIO(text), engine="python", sep=sep, on_bad_lines="skip")
+                break
+            except UnicodeDecodeError:
+                continue
+    except Exception as e:
+        # Fallback to local CSV if Drive fetch fails
+        if os.path.exists("oilwatch_data.csv"):
+            df = pd.read_csv("oilwatch_data.csv", sep=";", engine="python", on_bad_lines="skip")
+        else:
+            st.error(f"Failed to load data from Drive and no local file found: {e}")
+            return pd.DataFrame(columns=["Date", "Monthly Sales", "Company", "Customer Name"])
 
     if df is None or df.empty:
         return pd.DataFrame(columns=["Date", "Monthly Sales", "Company", "Customer Name"])
 
     df.columns = [c.strip() for c in df.columns]
 
-    # Robust matching for Monthly Sales column (handles typos like Montly)
-    sales_col = next((c for c in df.columns if "month" in c.lower() and "sale" in c.lower()), None)
+    # Flexible matching for Monthly Sales (supports 'Montly Sales' / 'Monthly Sales')
+    sales_col = next((c for c in df.columns if "sale" in c.lower()), None)
     if sales_col:
         df = df.rename(columns={sales_col: "Monthly Sales"})
     elif "Monthly Sales" not in df.columns:
