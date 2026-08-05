@@ -71,7 +71,7 @@ MONTH_MAP = {
 def fmt_rand(value):
     try:
         return f"R{float(value):,.2f}"
-    except:
+    except (ValueError, TypeError):
         return "R0.00"
 
 def millions_formatter(x, pos):
@@ -85,9 +85,13 @@ def clean_sales(value):
     if pd.isna(value):
         return 0.0
     s = str(value).strip().lower()
-    if s == "":
+    if not s:
         return 0.0
-    s = s.replace("r", "").replace(" ", "").replace("\\u00a0", "")
+
+    is_negative = "-" in s or "(" in s
+    s = s.replace("-", "").replace("(", "").replace(")", "")
+    s = s.replace("r", "").replace(" ", "").replace("\u00a0", "")
+
     mult = 1.0
     if s.endswith("m"):
         mult = 1000000.0
@@ -95,6 +99,7 @@ def clean_sales(value):
     elif s.endswith("k"):
         mult = 1000.0
         s = s[:-1]
+
     if "," in s and "." in s:
         if s.rfind(".") > s.rfind(","):
             s = s.replace(",", "")
@@ -110,9 +115,11 @@ def clean_sales(value):
         parts = s.split(".")
         if len(parts[-1]) == 3 and all(p.isdigit() for p in parts):
             s = "".join(parts)
+            
     try:
-        return float(s) * mult
-    except:
+        val = float(s) * mult
+        return -val if is_negative else val
+    except ValueError:
         return 0.0
 
 @st.cache_data(ttl=600)
@@ -133,6 +140,7 @@ def load_data_from_drive():
     raw = fh.getvalue()
     encodings = ["utf-8", "cp1252", "latin1", "iso-8859-1"]
 
+    df = None
     for enc in encodings:
         try:
             text = raw.decode(enc)
@@ -145,36 +153,33 @@ def load_data_from_drive():
             df = pd.read_csv(StringIO(text), engine="python", sep=sep, on_bad_lines="skip")
             break
         except UnicodeDecodeError:
-            df = None
             continue
 
     if df is None or df.empty:
-        return pd.DataFrame(columns=["Date", "Montly Sales", "Company", "Customer Name"])
+        return pd.DataFrame(columns=["Date", "Monthly Sales", "Company", "Customer Name"])
 
     df.columns = [c.strip() for c in df.columns]
 
-    if "Montly Sales" not in df.columns:
-        for c in df.columns:
-            if "Montly Sales" in c:
-                df = df.rename(columns={c: "Montly Sales"})
-                break
+    # Robust matching for Monthly Sales column (handles typos like Montly)
+    sales_col = next((c for c in df.columns if "month" in c.lower() and "sale" in c.lower()), None)
+    if sales_col:
+        df = df.rename(columns={sales_col: "Monthly Sales"})
+    elif "Monthly Sales" not in df.columns:
+        df["Monthly Sales"] = 0.0
 
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     else:
         df["Date"] = pd.NaT
 
-    if "Montly Sales" in df.columns:
-        df["Montly Sales"] = df["Montly Sales"].apply(clean_sales)
-    else:
-        df["Montly Sales"] = 0.0
+    df["Monthly Sales"] = df["Monthly Sales"].apply(clean_sales)
 
     if "Company" not in df.columns:
         df["Company"] = ""
     if "Customer Name" not in df.columns:
         df["Customer Name"] = ""
 
-    df = df[["Date", "Montly Sales", "Company", "Customer Name"]]
+    df = df[["Date", "Monthly Sales", "Company", "Customer Name"]]
     return df.dropna(subset=["Date"])
 
 def filter_company(df, choice):
@@ -186,20 +191,20 @@ def filter_company(df, choice):
 
 def money_frame(df):
     out = df.copy()
+    exclude_cols = ["Year", "Months_With_Data", "MonthNum", "Rank"]
     for c in out.columns:
-        if pd.api.types.is_numeric_dtype(out[c]):
-            if c not in ["Year", "Months_With_Data", "MonthNum", "Rank"]:
-                out[c] = out[c].apply(fmt_rand)
-    if "Growth %" in out.columns:
-        out["Growth %"] = out["Growth %"].map(lambda x: f"{x:.2f}%" if pd.notna(x) else "")
+        if "%" in c:
+            out[c] = out[c].map(lambda x: f"{x:.2f}%" if pd.notna(x) and isinstance(x, (int, float)) else x)
+        elif pd.api.types.is_numeric_dtype(out[c]) and c not in exclude_cols:
+            out[c] = out[c].apply(fmt_rand)
     return out
 
 def month_bounds(year, month):
     start = datetime(year, month, 1)
     if month == 12:
-        end = datetime(year, 12, 31)
+        end = datetime(year, 12, 31, 23, 59, 59)
     else:
-        end = datetime(year, month + 1, 1) - timedelta(days=1)
+        end = datetime(year, month + 1, 1) - timedelta(seconds=1)
     return start, end
 
 def last_month_bounds(now):
@@ -213,7 +218,7 @@ def selected_range_label(start, end):
 def yearly_avg_frame(df):
     yearly_avg = (
         df.groupby("Year", as_index=False)
-        .agg(Yearly_Total=("Montly Sales", "sum"), Months_With_Data=("MonthNum", "nunique"))
+        .agg(Yearly_Total=("Monthly Sales", "sum"), Months_With_Data=("MonthNum", "nunique"))
         .sort_values("Year")
     )
     yearly_avg["Average_Monthly_Sales"] = yearly_avg["Yearly_Total"] / yearly_avg["Months_With_Data"]
@@ -240,6 +245,7 @@ def plot_yearly_growth(df):
             ax.annotate(f"{y:.1f}%", (x, y), textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8)
 
     st.pyplot(fig, clear_figure=True)
+    plt.close(fig)
 
     display = yearly_avg.copy()
     display["Average_Monthly_Sales"] = display["Average_Monthly_Sales"].apply(fmt_rand)
@@ -252,7 +258,7 @@ def plot_yearly_total_sales(df):
         return
     yearly_total = (
         df.groupby("Year", as_index=False)
-        .agg(Yearly_Total_Sales=("Montly Sales", "sum"))
+        .agg(Yearly_Total_Sales=("Monthly Sales", "sum"))
         .sort_values("Year")
     )
 
@@ -271,6 +277,7 @@ def plot_yearly_total_sales(df):
         ax.annotate(label, (x, y), textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8)
 
     st.pyplot(fig, clear_figure=True)
+    plt.close(fig)
 
     display = yearly_total.copy()
     display["Yearly_Total_Sales"] = display["Yearly_Total_Sales"].apply(fmt_rand)
@@ -297,6 +304,7 @@ def plot_yearly_average_monthly_sales(df):
         ax.annotate(label, (x, y), textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8)
 
     st.pyplot(fig, clear_figure=True)
+    plt.close(fig)
 
     display = yearly_avg.copy()
     display["Yearly_Total"] = display["Yearly_Total"].apply(fmt_rand)
@@ -312,8 +320,8 @@ def show_grouped_bar_last_3_years(comp_df, title):
     last_3_years = [latest_year - 2, latest_year - 1, latest_year]
     filtered = comp_df[comp_df["Year"].isin(last_3_years)].copy()
 
-    monthly = filtered.groupby(["MonthNum", "Year"], as_index=False)["Montly Sales"].sum()
-    pivot = monthly.pivot(index="MonthNum", columns="Year", values="Montly Sales").reindex(range(1, 13))
+    monthly = filtered.groupby(["MonthNum", "Year"], as_index=False)["Monthly Sales"].sum()
+    pivot = monthly.pivot(index="MonthNum", columns="Year", values="Monthly Sales").reindex(range(1, 13))
     pivot.index = [MONTH_MAP[i] for i in pivot.index]
 
     fig, ax = plt.subplots(figsize=(11, 4))
@@ -329,6 +337,7 @@ def show_grouped_bar_last_3_years(comp_df, title):
     ax.yaxis.set_major_formatter(FuncFormatter(millions_formatter))
     ax.yaxis.offsetText.set_visible(False)
     st.pyplot(fig, clear_figure=True)
+    plt.close(fig)
 
 if "df" not in st.session_state:
     st.session_state.df = load_data_from_drive()
@@ -349,14 +358,11 @@ with tab1:
         df["Month"] = df["Date"].dt.strftime("%b")
 
         now = datetime.now()
-        shifted_current = now.replace(day=1) - timedelta(days=1)
-        shifted_last = shifted_current.replace(day=1) - timedelta(days=1)
-
-        current_year = now.year
-        cur_start, cur_end = month_bounds(shifted_current.year, shifted_current.month)
-        last_start, last_end = month_bounds(shifted_last.year, shifted_last.month)
-        year_start = datetime(current_year, 1, 1)
-        year_end = datetime(current_year, 12, 31)
+        cur_start, cur_end = month_bounds(now.year, now.month)
+        last_start, last_end = last_month_bounds(now)
+        
+        year_start = datetime(now.year, 1, 1)
+        year_end = datetime(now.year, 12, 31, 23, 59, 59)
 
         company_choice = sidebar_company_choice
 
@@ -367,10 +373,10 @@ with tab1:
         view_total = view_df[(view_df["Date"].dt.year >= 2018) & (view_df["Date"].dt.year <= 2026)]
 
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Current Month Sales", fmt_rand(view_current_month["Montly Sales"].sum()), selected_range_label(cur_start, cur_end))
-        m2.metric("Last Month Sales", fmt_rand(view_last_month["Montly Sales"].sum()), selected_range_label(last_start, last_end))
-        m3.metric("Current Year Sales", fmt_rand(view_current_year["Montly Sales"].sum()), f"{year_start:%d %b %Y} to {year_end:%d %b %Y}")
-        m4.metric("Sales 2018-2026", fmt_rand(view_total["Montly Sales"].sum()), "All included years")
+        m1.metric("Current Month Sales", fmt_rand(view_current_month["Monthly Sales"].sum()), selected_range_label(cur_start, cur_end))
+        m2.metric("Last Month Sales", fmt_rand(view_last_month["Monthly Sales"].sum()), selected_range_label(last_start, last_end))
+        m3.metric("Current Year Sales", fmt_rand(view_current_year["Monthly Sales"].sum()), f"{year_start:%d %b %Y} to {year_end:%d %b %Y}")
+        m4.metric("Sales 2018-2026", fmt_rand(view_total["Monthly Sales"].sum()), "All included years")
 
         st.markdown('<div class="section-title">Yearly Growth Rate</div>', unsafe_allow_html=True)
         plot_yearly_growth(view_df)
@@ -416,14 +422,14 @@ with tab2:
 
         def top_customers_frame(dataframe):
             top = (
-                dataframe.groupby("Customer Name", as_index=False)["Montly Sales"]
+                dataframe.groupby("Customer Name", as_index=False)["Monthly Sales"]
                 .sum()
-                .sort_values("Montly Sales", ascending=False)
+                .sort_values("Monthly Sales", ascending=False)
                 .head(30)
                 .reset_index(drop=True)
             )
             top.insert(0, "Rank", range(1, len(top) + 1))
-            top["Montly Sales"] = top["Montly Sales"].apply(fmt_rand)
+            top["Monthly Sales"] = top["Monthly Sales"].apply(fmt_rand)
             return top
 
         st.markdown("### All Time Top 30")
@@ -444,21 +450,21 @@ with tab2:
         last_3m = view_df2[(view_df2["Date"] > start_3) & (view_df2["Date"] <= today)].copy()
         prev_3m = view_df2[(view_df2["Date"] > start_6) & (view_df2["Date"] <= start_3)].copy()
 
-        last_3m_sales = last_3m.groupby("Customer Name", as_index=False)["Montly Sales"].sum()
-        prev_3m_sales = prev_3m.groupby("Customer Name", as_index=False)["Montly Sales"].sum()
+        last_3m_sales = last_3m.groupby("Customer Name", as_index=False)["Monthly Sales"].sum()
+        prev_3m_sales = prev_3m.groupby("Customer Name", as_index=False)["Monthly Sales"].sum()
 
         drop_df = last_3m_sales.merge(prev_3m_sales, on="Customer Name", how="outer", suffixes=("_Last3M", "_Prev3M")).fillna(0)
-        drop_df["Drop Value"] = drop_df["Montly Sales_Prev3M"] - drop_df["Montly Sales_Last3M"]
+        drop_df["Drop Value"] = drop_df["Monthly Sales_Prev3M"] - drop_df["Monthly Sales_Last3M"]
         drop_df["Drop %"] = drop_df.apply(
-            lambda r: (r["Drop Value"] / r["Montly Sales_Prev3M"] * 100) if r["Montly Sales_Prev3M"] > 0 else None,
+            lambda r: (r["Drop Value"] / r["Monthly Sales_Prev3M"] * 100) if r["Monthly Sales_Prev3M"] > 0 else None,
             axis=1
         )
 
         drop_df = drop_df.sort_values("Drop Value", ascending=False).head(5).reset_index(drop=True)
         drop_df.insert(0, "Rank", range(1, len(drop_df) + 1))
 
-        drop_df["Montly Sales_Last3M"] = drop_df["Montly Sales_Last3M"].apply(fmt_rand)
-        drop_df["Montly Sales_Prev3M"] = drop_df["Montly Sales_Prev3M"].apply(fmt_rand)
+        drop_df["Monthly Sales_Last3M"] = drop_df["Monthly Sales_Last3M"].apply(fmt_rand)
+        drop_df["Monthly Sales_Prev3M"] = drop_df["Monthly Sales_Prev3M"].apply(fmt_rand)
         drop_df["Drop Value"] = drop_df["Drop Value"].apply(fmt_rand)
         drop_df["Drop %"] = drop_df["Drop %"].map(lambda x: f"{x:.2f}%" if pd.notna(x) else "")
 
@@ -466,8 +472,8 @@ with tab2:
             drop_df[[
                 "Rank",
                 "Customer Name",
-                "Montly Sales_Prev3M",
-                "Montly Sales_Last3M",
+                "Monthly Sales_Prev3M",
+                "Monthly Sales_Last3M",
                 "Drop Value",
                 "Drop %"
             ]],
@@ -476,9 +482,9 @@ with tab2:
         )
 
         if not top_all.empty:
-            plot_df = view_df2.groupby("Customer Name", as_index=False)["Montly Sales"].sum().sort_values("Montly Sales", ascending=True).tail(30)
+            plot_df = view_df2.groupby("Customer Name", as_index=False)["Monthly Sales"].sum().sort_values("Monthly Sales", ascending=True).tail(30)
             fig, ax = plt.subplots(figsize=(10, 6))
-            ax.barh(plot_df["Customer Name"], plot_df["Montly Sales"])
+            ax.barh(plot_df["Customer Name"], plot_df["Monthly Sales"])
             ax.set_title("Top Customers")
             ax.set_xlabel("Rand")
             ax.tick_params(axis="y", labelsize=8)
@@ -487,6 +493,7 @@ with tab2:
             ax.xaxis.set_major_formatter(FuncFormatter(millions_formatter))
             ax.xaxis.offsetText.set_visible(False)
             st.pyplot(fig, clear_figure=True)
+            plt.close(fig)
 
 with tab3:
     st.markdown('<div class="section-title">Data File</div>', unsafe_allow_html=True)
