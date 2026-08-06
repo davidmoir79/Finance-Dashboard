@@ -372,7 +372,6 @@ with tab1:
 
         # Use the last month with data as "current month"
 last_date = df["Date"].max()
-now = last_date  # Use last date in data instead of today's date
 
 cur_start, cur_end = month_bounds(last_date.year, last_date.month)
 last_start, last_end = last_month_bounds(last_date)
