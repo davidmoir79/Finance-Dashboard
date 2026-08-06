@@ -370,9 +370,19 @@ with tab1:
         df["MonthNum"] = df["Date"].dt.month
         df["Month"] = df["Date"].dt.strftime("%b")
 
-        # Use the last month with data as "current month"
-# Use the previous calendar month as the "Current Month"
+        # ==========================================================
+        # Reporting Month = Previous Calendar Month
+        # ==========================================================
+        today = datetime.today()
+        first_this_month = datetime(today.year, today.month, 1)
+        report_month = first_this_month - timedelta(days=1)
 
+        cur_start, cur_end = month_bounds(report_month.year, report_month.month)
+        last_start, last_end = last_month_bounds(report_month)
+
+        current_year = report_month.year
+        year_start = datetime(current_year, 1, 1)
+        year_end = datetime(current_year, 12, 31, 23, 59, 59)
 
         company_choice = sidebar_company_choice
 
@@ -380,7 +390,7 @@ with tab1:
         view_current_month = view_df[(view_df["Date"] >= cur_start) & (view_df["Date"] <= cur_end)]
         view_last_month = view_df[(view_df["Date"] >= last_start) & (view_df["Date"] <= last_end)]
         view_current_year = view_df[(view_df["Date"] >= year_start) & (view_df["Date"] <= year_end)]
-        view_total = view_df[(view_df["Date"].dt.year >= 2018) & (view_df["Date"].dt.year <= 2026)]
+        view_total = view_df[view_df["Date"].dt.year <= current_year]
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Current Month Sales", fmt_rand(view_current_month["Monthly Sales"].sum()), selected_range_label(cur_start, cur_end))
@@ -425,10 +435,12 @@ with tab2:
             view_df2 = st.session_state.df[st.session_state.df["Company"].isin(COMPANY_MAP[top_choice])].copy()
 
         today = pd.Timestamp.today().normalize()
-        start_12 = today - pd.DateOffset(months=12)
-        start_24 = today - pd.DateOffset(months=24)
-        start_3 = today - pd.DateOffset(months=3)
-        start_6 = today - pd.DateOffset(months=6)
+        report_date = today.replace(day=1) - pd.Timedelta(days=1)
+        start_12 = report_date - pd.DateOffset(months=12)
+        start_24 = report_date - pd.DateOffset(months=24)
+        start_3 = report_date - pd.DateOffset(months=3)
+        start_6 = report_date - pd.DateOffset(months=6)
+        today = report_date
 
         def top_customers_frame(dataframe):
             top = (
