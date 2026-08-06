@@ -371,13 +371,8 @@ with tab1:
         df["Month"] = df["Date"].dt.strftime("%b")
 
         # Use the last month with data as "current month"
-last_date = df["Date"].max()
+# Use the previous calendar month as the "Current Month"
 
-cur_start, cur_end = month_bounds(last_date.year, last_date.month)
-last_start, last_end = last_month_bounds(last_date)
-        
-        year_start = datetime(now.year, 1, 1)
-        year_end = datetime(now.year, 12, 31, 23, 59, 59)
 
         company_choice = sidebar_company_choice
 
