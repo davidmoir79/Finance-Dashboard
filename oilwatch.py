@@ -370,9 +370,12 @@ with tab1:
         df["MonthNum"] = df["Date"].dt.month
         df["Month"] = df["Date"].dt.strftime("%b")
 
-        now = datetime.now()
-        cur_start, cur_end = month_bounds(now.year, now.month)
-        last_start, last_end = last_month_bounds(now)
+        # Use the last month with data as "current month"
+last_date = df["Date"].max()
+now = last_date  # Use last date in data instead of today's date
+
+cur_start, cur_end = month_bounds(last_date.year, last_date.month)
+last_start, last_end = last_month_bounds(last_date)
         
         year_start = datetime(now.year, 1, 1)
         year_end = datetime(now.year, 12, 31, 23, 59, 59)
