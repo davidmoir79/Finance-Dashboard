@@ -2,527 +2,905 @@ import streamlit as st
 import pandas as pd
 import csv
 import os
+
 from datetime import datetime, timedelta
+from io import BytesIO, StringIO
+
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
+
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-from io import BytesIO, StringIO
 
-st.set_page_config(page_title="Oilwatch Financial Dashboard", layout="wide")
 
-st.markdown(
-    """
-    <style>
-    .main .block-container {padding-top: 1.5rem; padding-bottom: 1.5rem;}
-    .hero {
-        padding: 1rem 1.25rem;
-        border-radius: 18px;
-        background: linear-gradient(90deg, #0f172a 0%, #1e3a8a 55%, #2563eb 100%);
-        color: white;
-        margin-bottom: 1rem;
-        box-shadow: 0 10px 28px rgba(0,0,0,0.18);
-    }
-    .hero h1 {margin: 0; font-size: 2.2rem; font-weight: 800;}
-    .hero p {margin: 0.25rem 0 0 0; opacity: 0.9;}
-    .section-title {
-        font-size: 1.25rem;
-        font-weight: 700;
-        margin-top: 0.75rem;
-        margin-bottom: 0.25rem;
-        color: #0f172a;
-    }
-    div[data-testid="metric-container"] {
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        padding: 0.75rem 0.85rem;
-        border-radius: 14px;
-        box-shadow: 0 2px 10px rgba(15,23,42,0.04);
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
+# ==========================================================
+# PAGE SETTINGS
+# ==========================================================
+
+st.set_page_config(
+    page_title="Transformer Oil Lab Dashboard",
+    layout="wide"
 )
 
-st.markdown(
-    """
-    <div class="hero">
-        <h1>🛢️ Oilwatch Financial Dashboard</h1>
-        <p>Sales overview, monthly trends, and customer analysis.</p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+st.markdown("""
+<style>
+
+.main .block-container{
+    padding-top:1.5rem;
+    padding-bottom:1.5rem;
+}
+
+.hero{
+    padding:1rem;
+    border-radius:18px;
+    background:linear-gradient(90deg,#0f172a,#1e3a8a,#2563eb);
+    color:white;
+    margin-bottom:1rem;
+}
+
+.hero h1{
+    margin:0;
+}
+
+.section-title{
+    font-size:1.25rem;
+    font-weight:700;
+    margin-top:1rem;
+}
+
+div[data-testid="metric-container"]{
+    background:#f8fafc;
+    border:1px solid #e2e8f0;
+    border-radius:14px;
+    padding:0.8rem;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="hero">
+<h1>🛢️ Transformer Oil Lab Dashboard</h1>
+<p>Sales overview and customer analytics</p>
+</div>
+""", unsafe_allow_html=True)
+# ==========================================================
+# GOOGLE DRIVE SETTINGS
+# ==========================================================
 
 FILE_ID = "1KEbgg2u3FSMRIMcrEBTDeYW0qzTnpICH"
-SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
-COMPANY_MAP = {
-    "Lube Oil Lab": ["TBY", "Lube Oil Lab", "Oilwatch Transformer Services"],
-    "Transformer Oil Lab": ["TFM", "Transformer Oil Lab", "Oilwatch Lubricating Laboratory"]
-}
+SCOPES = [
+    "https://www.googleapis.com/auth/drive.readonly"
+]
+
 
 MONTH_MAP = {
-    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
-    7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
+    1:"Jan",
+    2:"Feb",
+    3:"Mar",
+    4:"Apr",
+    5:"May",
+    6:"Jun",
+    7:"Jul",
+    8:"Aug",
+    9:"Sep",
+    10:"Oct",
+    11:"Nov",
+    12:"Dec"
 }
 
-def fmt_rand(value):
+
+TRANSFORMER_CODES = [
+    "TFM",
+    "Transformer Oil Lab",
+    "Oilwatch Lubricating Laboratory"
+]def fmt_rand(value):
+
     try:
         return f"R{float(value):,.2f}"
-    except (ValueError, TypeError):
+
+    except:
         return "R0.00"
 
-def millions_formatter(x, pos):
-    if pd.isna(x):
-        return ""
-    if abs(x) >= 1000000:
+
+def millions_formatter(x,pos):
+
+    if abs(x)>=1000000:
         return f"R{x/1000000:.1f}m"
-    return f"R{x:,.0f}"
 
-def clean_sales(value):
+    return f"R{x:,.0f}"def clean_sales(value):
+
     if pd.isna(value):
-        return 0.0
-    s = str(value).strip().lower()
-    if not s:
-        return 0.0
+        return 0
 
-    is_negative = "-" in s or "(" in s
-    s = s.replace("-", "").replace("(", "").replace(")", "")
-    s = s.replace("r", "").replace(" ", "").replace("\u00a0", "")
+    s=str(value).lower().strip()
 
-    mult = 1.0
+    negative=False
+
+    if "-" in s or "(" in s:
+        negative=True
+
+    s=s.replace("(","")
+    s=s.replace(")","")
+    s=s.replace("-","")
+    s=s.replace("r","")
+    s=s.replace(" ","")
+
+    multiplier=1
+
     if s.endswith("m"):
-        mult = 1000000.0
-        s = s[:-1]
+        multiplier=1000000
+        s=s[:-1]
+
     elif s.endswith("k"):
-        mult = 1000.0
-        s = s[:-1]
+        multiplier=1000
+        s=s[:-1]
 
     if "," in s and "." in s:
-        if s.rfind(".") > s.rfind(","):
-            s = s.replace(",", "")
+
+        if s.rfind(".")>s.rfind(","):
+            s=s.replace(",","")
+
         else:
-            s = s.replace(".", "").replace(",", ".")
-    elif "," in s:
-        parts = s.split(",")
-        if len(parts[-1]) == 3 and all(p.isdigit() for p in parts):
-            s = "".join(parts)
-        else:
-            s = s.replace(",", ".")
-    elif "." in s:
-        parts = s.split(".")
-        if len(parts[-1]) == 3 and all(p.isdigit() for p in parts):
-            s = "".join(parts)
-            
-    try:
-        val = float(s) * mult
-        return -val if is_negative else val
-    except ValueError:
-        return 0.0
+            s=s.replace(".","")
+            s=s.replace(",",".")
+                try:
+        value = float(s) * multiplier
+
+        if negative:
+            value = -value
+
+        return value
+
+    except:
+        return 0
+
+
+# ==========================================================
+# GOOGLE DRIVE LOADER
+# ==========================================================
 
 @st.cache_data(ttl=600)
-def load_data_from_drive():
+
+def load_data():
+
     try:
-        # Load and sanitize Google Cloud credentials
+
         service_account_info = dict(st.secrets["gcp_service_account"])
-        if "private_key" in service_account_info:
-            service_account_info["private_key"] = service_account_info["private_key"].replace("\\n", "\n")
+
+        service_account_info["private_key"] = (
+            service_account_info["private_key"]
+            .replace("\\n","\n")
+        )
 
         creds = Credentials.from_service_account_info(
             service_account_info,
-            scopes=SCOPES,
+            scopes=SCOPES
         )
-        service = build("drive", "v3", credentials=creds)
+
+        service = build(
+            "drive",
+            "v3",
+            credentials=creds
+        )
+
         request = service.files().get_media(fileId=FILE_ID)
 
         fh = BytesIO()
+
         downloader = MediaIoBaseDownload(fh, request)
+
         done = False
+
         while not done:
             _, done = downloader.next_chunk()
 
         raw = fh.getvalue()
-        encodings = ["utf-8", "cp1252", "latin1", "iso-8859-1"]
 
-        df = None
-        for enc in encodings:
-            try:
-                text = raw.decode(enc)
-                sample = "\n".join(text.splitlines()[:30])
-                try:
-                    dialect = csv.Sniffer().sniff(sample, delimiters=[",", ";", "\t", "|"])
-                    sep = dialect.delimiter
-                except Exception:
-                    sep = ";"
-                df = pd.read_csv(StringIO(text), engine="python", sep=sep, on_bad_lines="skip")
-                break
-            except UnicodeDecodeError:
-                continue
+        text = raw.decode("utf-8", errors="ignore")
+
+        sample = "\n".join(text.splitlines()[:30])
+
+        try:
+            dialect = csv.Sniffer().sniff(
+                sample,
+                delimiters=[",",";","\t","|"]
+            )
+            sep = dialect.delimiter
+
+        except:
+            sep=";"
+
+        df = pd.read_csv(
+            StringIO(text),
+            sep=sep,
+            engine="python",
+            on_bad_lines="skip"
+        )
+
     except Exception as e:
-        # Fallback to local CSV if Drive fetch fails
-        if os.path.exists("oilwatch_data.csv"):
-            df = pd.read_csv("oilwatch_data.csv", sep=";", engine="python", on_bad_lines="skip")
-        else:
-            st.error(f"Failed to load data from Drive and no local file found: {e}")
-            return pd.DataFrame(columns=["Date", "Monthly Sales", "Company", "Customer Name"])
 
-    if df is None or df.empty:
-        return pd.DataFrame(columns=["Date", "Monthly Sales", "Company", "Customer Name"])
+        st.error(e)
 
-    df.columns = [c.strip() for c in df.columns]
+        return pd.DataFrame()
 
-    # Flexible matching for Monthly Sales (supports 'Montly Sales' / 'Monthly Sales')
-    sales_col = next((c for c in df.columns if "sale" in c.lower()), None)
+    df.columns = df.columns.str.strip()
+
+    sales_col = next(
+        (c for c in df.columns if "sale" in c.lower()),
+        None
+    )
+
     if sales_col:
-        df = df.rename(columns={sales_col: "Monthly Sales"})
-    elif "Monthly Sales" not in df.columns:
-        df["Monthly Sales"] = 0.0
+        df.rename(
+            columns={sales_col:"Monthly Sales"},
+            inplace=True
+        )
 
-    if "Date" in df.columns:
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    else:
-        df["Date"] = pd.NaT
+    df["Monthly Sales"] = (
+        df["Monthly Sales"]
+        .apply(clean_sales)
+    )
 
-    df["Monthly Sales"] = df["Monthly Sales"].apply(clean_sales)
+    df["Date"] = pd.to_datetime(
+        df["Date"],
+        errors="coerce"
+    )
 
-    if "Company" not in df.columns:
-        df["Company"] = ""
-    if "Customer Name" not in df.columns:
-        df["Customer Name"] = ""
+    df["Company"] = (
+        df["Company"]
+        .astype(str)
+        .str.strip()
+    )
 
-    df = df[["Date", "Monthly Sales", "Company", "Customer Name"]]
-    return df.dropna(subset=["Date"])
+    df["Customer Name"] = (
+        df["Customer Name"]
+        .astype(str)
+        .str.strip()
+    )
 
-def filter_company(df, choice):
-    if choice == "Combined":
-        return df[df["Company"].isin(sum(COMPANY_MAP.values(), []))].copy()
-    if choice in COMPANY_MAP:
-        return df[df["Company"].isin(COMPANY_MAP[choice])].copy()
-    return df[df["Company"] == choice].copy()
+    df = df[
+        df["Company"].isin(
+            TRANSFORMER_CODES
+        )
+    ]
 
-def money_frame(df):
-    out = df.copy()
-    exclude_cols = ["Year", "Months_With_Data", "MonthNum", "Rank"]
-    for c in out.columns:
-        if "%" in c:
-            out[c] = out[c].map(lambda x: f"{x:.2f}%" if pd.notna(x) and isinstance(x, (int, float)) else x)
-        elif pd.api.types.is_numeric_dtype(out[c]) and c not in exclude_cols:
-            out[c] = out[c].apply(fmt_rand)
-    return out
+    df = df.dropna(subset=["Date"])
+
+    return df.sort_values("Date")
+    # ==========================================================
+# FILTERS
+# ==========================================================
 
 def month_bounds(year, month):
+
     start = datetime(year, month, 1)
+
     if month == 12:
-        end = datetime(year, 12, 31, 23, 59, 59)
+
+        end = datetime(
+            year,
+            12,
+            31,
+            23,
+            59,
+            59
+        )
+
     else:
-        end = datetime(year, month + 1, 1) - timedelta(seconds=1)
+
+        end = (
+            datetime(year, month + 1, 1)
+            - timedelta(seconds=1)
+        )
+
     return start, end
 
+
 def last_month_bounds(now):
-    first_this_month = datetime(now.year, now.month, 1)
-    last_day_last_month = first_this_month - timedelta(days=1)
-    return month_bounds(last_day_last_month.year, last_day_last_month.month)
 
-def selected_range_label(start, end):
-    return f"{start:%d %b %Y} to {end:%d %b %Y}"
-
-def yearly_avg_frame(df):
-    yearly_avg = (
-        df.groupby("Year", as_index=False)
-        .agg(Yearly_Total=("Monthly Sales", "sum"), Months_With_Data=("MonthNum", "nunique"))
-        .sort_values("Year")
+    first_this_month = datetime(
+        now.year,
+        now.month,
+        1
     )
-    yearly_avg["Average_Monthly_Sales"] = yearly_avg["Yearly_Total"] / yearly_avg["Months_With_Data"]
-    return yearly_avg
 
-def plot_yearly_growth(df):
-    if df.empty:
-        st.info("No data.")
-        return
-    yearly_avg = yearly_avg_frame(df)
-    yearly_avg["Growth %"] = yearly_avg["Average_Monthly_Sales"].pct_change() * 100
+    last_day = first_this_month - timedelta(days=1)
 
-    fig, ax = plt.subplots(figsize=(9, 3.5))
-    ax.plot(yearly_avg["Year"], yearly_avg["Growth %"], marker="o", linewidth=2, color="#1f77b4")
-    ax.axhline(0, color="gray", linewidth=1)
-    ax.set_title("Yearly Growth Rate Based on Average Monthly Sales", fontsize=11)
-    ax.set_xlabel("Year", fontsize=9)
-    ax.set_ylabel("Growth %", fontsize=9)
-    ax.tick_params(axis="both", labelsize=8)
-    ax.grid(True, alpha=0.25)
+    return month_bounds(
+        last_day.year,
+        last_day.month
+    )
 
-    for x, y in zip(yearly_avg["Year"], yearly_avg["Growth %"]):
-        if pd.notna(y):
-            ax.annotate(f"{y:.1f}%", (x, y), textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8)
 
-    st.pyplot(fig, clear_figure=True)
-    plt.close(fig)
+def selected_range_label(start,end):
 
-    display = yearly_avg.copy()
-    display["Average_Monthly_Sales"] = display["Average_Monthly_Sales"].apply(fmt_rand)
-    display["Growth %"] = display["Growth %"].map(lambda x: f"{x:.2f}%" if pd.notna(x) else "")
-    st.dataframe(display[["Year", "Average_Monthly_Sales", "Growth %"]], use_container_width=True, hide_index=True)
+    return (
+        f"{start:%d %b %Y}"
+        f" to "
+        f"{end:%d %b %Y}"
+    )def yearly_average(df):
 
-def plot_yearly_total_sales(df):
-    if df.empty:
-        st.info("No data.")
-        return
-    yearly_total = (
-        df.groupby("Year", as_index=False)
-        .agg(Yearly_Total_Sales=("Monthly Sales", "sum"))
+    out = (
+        df.groupby("Year",as_index=False)
+        .agg(
+            Yearly_Total=("Monthly Sales","sum"),
+            Months=("MonthNum","nunique")
+        )
         .sort_values("Year")
     )
 
-    fig, ax = plt.subplots(figsize=(9, 3.5))
-    ax.plot(yearly_total["Year"], yearly_total["Yearly_Total_Sales"], marker="o", linewidth=2, color="#2ca02c")
-    ax.set_title("Yearly Total Sales", fontsize=11)
-    ax.set_xlabel("Year", fontsize=9)
-    ax.set_ylabel("Rand (millions)", fontsize=9)
-    ax.tick_params(axis="both", labelsize=8)
-    ax.grid(True, alpha=0.25)
-    ax.yaxis.set_major_formatter(FuncFormatter(millions_formatter))
-    ax.yaxis.offsetText.set_visible(False)
+    out["Average Monthly"] = (
+        out["Yearly_Total"] /
+        out["Months"]
+    )
 
-    for x, y in zip(yearly_total["Year"], yearly_total["Yearly_Total_Sales"]):
-        label = f"R{y/1000000:.1f}m" if abs(y) >= 1000000 else f"R{y:,.0f}"
-        ax.annotate(label, (x, y), textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8)
-
-    st.pyplot(fig, clear_figure=True)
-    plt.close(fig)
-
-    display = yearly_total.copy()
-    display["Yearly_Total_Sales"] = display["Yearly_Total_Sales"].apply(fmt_rand)
-    st.dataframe(display, use_container_width=True, hide_index=True)
-
-def plot_yearly_average_monthly_sales(df):
-    if df.empty:
-        st.info("No data.")
-        return
-    yearly_avg = yearly_avg_frame(df)
-
-    fig, ax = plt.subplots(figsize=(9, 3.5))
-    ax.plot(yearly_avg["Year"], yearly_avg["Average_Monthly_Sales"], marker="o", linewidth=2, color="#ff7f0e")
-    ax.set_title("Yearly Average Monthly Sales", fontsize=11)
-    ax.set_xlabel("Year", fontsize=9)
-    ax.set_ylabel("Rand (millions)", fontsize=9)
-    ax.tick_params(axis="both", labelsize=8)
-    ax.grid(True, alpha=0.25)
-    ax.yaxis.set_major_formatter(FuncFormatter(millions_formatter))
-    ax.yaxis.offsetText.set_visible(False)
-
-    for x, y in zip(yearly_avg["Year"], yearly_avg["Average_Monthly_Sales"]):
-        label = f"R{y/1000000:.1f}m" if abs(y) >= 1000000 else f"R{y:,.0f}"
-        ax.annotate(label, (x, y), textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8)
-
-    st.pyplot(fig, clear_figure=True)
-    plt.close(fig)
-
-    display = yearly_avg.copy()
-    display["Yearly_Total"] = display["Yearly_Total"].apply(fmt_rand)
-    display["Average_Monthly_Sales"] = display["Average_Monthly_Sales"].apply(fmt_rand)
-    st.dataframe(display[["Year", "Yearly_Total", "Average_Monthly_Sales"]], use_container_width=True, hide_index=True)
-
-def show_grouped_bar_last_3_years(comp_df, title):
-    st.markdown(f"### {title}")
-    if comp_df.empty:
-        st.info("No data.")
-        return
-    latest_year = int(comp_df["Year"].max())
-    last_3_years = [latest_year - 2, latest_year - 1, latest_year]
-    filtered = comp_df[comp_df["Year"].isin(last_3_years)].copy()
-
-    monthly = filtered.groupby(["MonthNum", "Year"], as_index=False)["Monthly Sales"].sum()
-    pivot = monthly.pivot(index="MonthNum", columns="Year", values="Monthly Sales").reindex(range(1, 13))
-    pivot.index = [MONTH_MAP[i] for i in pivot.index]
-
-    fig, ax = plt.subplots(figsize=(11, 4))
-    pivot.plot(kind="bar", ax=ax, width=0.85)
-    ax.axhline(0, color="black", linewidth=0.8)
-    ax.set_xlabel("Month", fontsize=9)
-    ax.set_ylabel("Sales (Rand)", fontsize=9)
-    ax.set_title(title, fontsize=11)
-    ax.tick_params(axis="x", labelsize=8)
-    ax.tick_params(axis="y", labelsize=8)
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.2)
-    ax.yaxis.set_major_formatter(FuncFormatter(millions_formatter))
-    ax.yaxis.offsetText.set_visible(False)
-    st.pyplot(fig, clear_figure=True)
-    plt.close(fig)
+    return out
+    # ==========================================================
+# LOAD DATA
+# ==========================================================
 
 if "df" not in st.session_state:
-    st.session_state.df = load_data_from_drive()
+    st.session_state.df = load_data()
 
-st.sidebar.success(f"Rows loaded: {len(st.session_state.df)}")
-sidebar_company_choice = "Transformer Oil Lab"
-st.sidebar.info("Viewing: Transformer Oil Lab")
+df = st.session_state.df.copy()
 
-tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "🏆 Top Customers", "📁 Data"])
+if df.empty:
+    st.error("No data could be loaded.")
+    st.stop()
 
-with tab1:
-    st.markdown('<div class="section-title">Dashboard</div>', unsafe_allow_html=True)
-    if st.session_state.df.empty:
-        st.info("No data loaded.")
-    else:
-        df = st.session_state.df.copy()
-        df["Year"] = df["Date"].dt.year
-        df["MonthNum"] = df["Date"].dt.month
-        df["Month"] = df["Date"].dt.strftime("%b")
+# ==========================================================
+# PREPARE DATA
+# ==========================================================
 
-        # ==========================================================
-        # Reporting Month = Previous Calendar Month
-        # ==========================================================
-        today = datetime.today()
-        first_this_month = datetime(today.year, today.month, 1)
-        report_month = first_this_month - timedelta(days=1)
+df["Year"] = df["Date"].dt.year
+df["MonthNum"] = df["Date"].dt.month
+df["Month"] = df["Date"].dt.strftime("%b")
 
-        cur_start, cur_end = month_bounds(report_month.year, report_month.month)
-        last_start, last_end = last_month_bounds(report_month)
+# ==========================================================
+# REPORTING MONTH
+# Current Month = Previous Completed Month
+# ==========================================================
 
-        current_year = report_month.year
-        year_start = datetime(current_year, 1, 1)
-        year_end = datetime(current_year, 12, 31, 23, 59, 59)
+today = datetime.today()
 
-        company_choice = sidebar_company_choice
+first_this_month = datetime(
+    today.year,
+    today.month,
+    1
+)
 
-        view_df = filter_company(df, company_choice)
-        view_current_month = view_df[(view_df["Date"] >= cur_start) & (view_df["Date"] <= cur_end)]
-        view_last_month = view_df[(view_df["Date"] >= last_start) & (view_df["Date"] <= last_end)]
-        view_current_year = view_df[(view_df["Date"] >= year_start) & (view_df["Date"] <= year_end)]
-        view_total = view_df[view_df["Date"].dt.year <= current_year]
+report_month = first_this_month - timedelta(days=1)
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Current Month Sales", fmt_rand(view_current_month["Monthly Sales"].sum()), selected_range_label(cur_start, cur_end))
-        m2.metric("Last Month Sales", fmt_rand(view_last_month["Monthly Sales"].sum()), selected_range_label(last_start, last_end))
-        m3.metric("Current Year Sales", fmt_rand(view_current_year["Monthly Sales"].sum()), f"{year_start:%d %b %Y} to {year_end:%d %b %Y}")
-        m4.metric("Sales 2018-2026", fmt_rand(view_total["Monthly Sales"].sum()), "All included years")
+cur_start, cur_end = month_bounds(
+    report_month.year,
+    report_month.month
+)
 
-        st.markdown('<div class="section-title">Yearly Growth Rate</div>', unsafe_allow_html=True)
-        plot_yearly_growth(view_df)
+last_start, last_end = last_month_bounds(
+    report_month
+)
 
-        st.markdown('<div class="section-title">Yearly Total Sales</div>', unsafe_allow_html=True)
-        plot_yearly_total_sales(view_df)
+current_year = report_month.year
 
-        st.markdown('<div class="section-title">Yearly Average Monthly Sales</div>', unsafe_allow_html=True)
-        plot_yearly_average_monthly_sales(view_df)
+year_start = datetime(
+    current_year,
+    1,
+    1
+)
 
-        st.markdown('<div class="section-title">Monthly Sales by Year - Last 3 Years</div>', unsafe_allow_html=True)
-        if company_choice == "Combined":
-            cols = st.columns(2)
-            with cols[0]:
-                show_grouped_bar_last_3_years(view_df[view_df["Company"].isin(COMPANY_MAP["Lube Oil Lab"])], "Lube Oil Lab")
-            with cols[1]:
-                show_grouped_bar_last_3_years(view_df[view_df["Company"].isin(COMPANY_MAP["Transformer Oil Lab"])], "Transformer Oil Lab")
-        else:
-            show_grouped_bar_last_3_years(view_df, company_choice)
+year_end = datetime(
+    current_year,
+    12,
+    31,
+    23,
+    59,
+    59
+)
 
-        st.markdown('<div class="section-title">Recent Records</div>', unsafe_allow_html=True)
-        st.dataframe(money_frame(view_df.tail(20)), use_container_width=True, hide_index=True)
+# ==========================================================
+# FILTERS
+# ==========================================================
+
+current_month = df[
+    (df["Date"] >= cur_start) &
+    (df["Date"] <= cur_end)
+]
+
+last_month = df[
+    (df["Date"] >= last_start) &
+    (df["Date"] <= last_end)
+]
+
+current_year_df = df[
+    (df["Date"] >= year_start) &
+    (df["Date"] <= year_end)
+]
+
+all_sales = df[
+    df["Date"].dt.year <= current_year
+]
+
+# ==========================================================
+# TABS
+# ==========================================================
+
+tab1, tab2, tab3 = st.tabs(
+    [
+        "📊 Dashboard",
+        "🏆 Top Customers",
+        "📁 Data"
+    ]
+)with tab1:
+
+    st.markdown(
+        '<div class="section-title">Dashboard</div>',
+        unsafe_allow_html=True
+    )
+
+    c1,c2,c3,c4 = st.columns(4)
+
+    c1.metric(
+        "Current Month Sales",
+        fmt_rand(
+            current_month["Monthly Sales"].sum()
+        ),
+        selected_range_label(
+            cur_start,
+            cur_end
+        )
+    )
+
+    c2.metric(
+        "Previous Month Sales",
+        fmt_rand(
+            last_month["Monthly Sales"].sum()
+        ),
+        selected_range_label(
+            last_start,
+            last_end
+        )
+    )
+
+    c3.metric(
+        "Current Year Sales",
+        fmt_rand(
+            current_year_df["Monthly Sales"].sum()
+        ),
+        str(current_year)
+    )
+
+    c4.metric(
+        "Total Sales",
+        fmt_rand(
+            all_sales["Monthly Sales"].sum()
+        ),
+        "All Years"
+    )    yearly = (
+        df.groupby("Year",as_index=False)
+        .agg(
+            Sales=("Monthly Sales","sum")
+        )
+        .sort_values("Year")
+    )
+
+    st.markdown(
+        "### Yearly Sales"
+    )
+
+    fig,ax = plt.subplots(
+        figsize=(10,4)
+    )
+
+    ax.plot(
+        yearly["Year"],
+        yearly["Sales"],
+        marker="o",
+        linewidth=2
+    )
+
+    ax.grid(True)
+
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Sales")
+
+    ax.yaxis.set_major_formatter(
+        FuncFormatter(
+            millions_formatter
+        )
+    )
+
+    st.pyplot(fig)
+
+    plt.close(fig)
+        avg = yearly_average(df)
+
+    st.markdown(
+        "### Average Monthly Sales"
+    )
+
+    fig,ax = plt.subplots(
+        figsize=(10,4)
+    )
+
+    ax.plot(
+        avg["Year"],
+        avg["Average Monthly"],
+        marker="o",
+        linewidth=2,
+        color="orange"
+    )
+
+    ax.grid(True)
+
+    ax.yaxis.set_major_formatter(
+        FuncFormatter(
+            millions_formatter
+        )
+    )
+
+    st.pyplot(fig)
+
+    plt.close(fig)
+    st.markdown(
+        "### Recent Records"
+    )
+
+    recent = (
+        df.sort_values(
+            "Date",
+            ascending=False
+        )
+        .head(20)
+    )
+
+    st.dataframe(
+        recent,
+        use_container_width=True,
+        hide_index=True
+    )
+# ==========================================================
+# TOP CUSTOMERS
+# ==========================================================
 
 with tab2:
-    st.markdown('<div class="section-title">Top Customers</div>', unsafe_allow_html=True)
-    if st.session_state.df.empty:
-        st.info("No data loaded.")
-    else:
-        top_choice = "Transformer Oil Lab"
-st.caption("Viewing: Transformer Oil Lab")
 
-        if top_choice == "All Companies":
-            view_df2 = st.session_state.df.copy()
-        elif top_choice == "Combined":
-            view_df2 = st.session_state.df[st.session_state.df["Company"].isin(sum(COMPANY_MAP.values(), []))].copy()
-        else:
-            view_df2 = st.session_state.df[st.session_state.df["Company"].isin(COMPANY_MAP[top_choice])].copy()
+    st.markdown(
+        '<div class="section-title">Top Customers</div>',
+        unsafe_allow_html=True
+    )
 
-        today = pd.Timestamp.today().normalize()
-        report_date = today.replace(day=1) - pd.Timedelta(days=1)
-        start_12 = report_date - pd.DateOffset(months=12)
-        start_24 = report_date - pd.DateOffset(months=24)
-        start_3 = report_date - pd.DateOffset(months=3)
-        start_6 = report_date - pd.DateOffset(months=6)
-        today = report_date
+    report_date = pd.Timestamp(report_month)
 
-        def top_customers_frame(dataframe):
-            top = (
-                dataframe.groupby("Customer Name", as_index=False)["Monthly Sales"]
-                .sum()
-                .sort_values("Monthly Sales", ascending=False)
-                .head(30)
-                .reset_index(drop=True)
+    start_24 = report_date - pd.DateOffset(months=24)
+    start_12 = report_date - pd.DateOffset(months=12)
+    start_6  = report_date - pd.DateOffset(months=6)
+    start_3  = report_date - pd.DateOffset(months=3)
+
+    # ------------------------------------------------------
+    # Helper
+    # ------------------------------------------------------
+
+    def top_customers_frame(data):
+
+        top = (
+            data.groupby("Customer Name", as_index=False)
+            ["Monthly Sales"]
+            .sum()
+            .sort_values(
+                "Monthly Sales",
+                ascending=False
             )
-            top.insert(0, "Rank", range(1, len(top) + 1))
-            top["Monthly Sales"] = top["Monthly Sales"].apply(fmt_rand)
-            return top
-
-        st.markdown("### All Time Top 30")
-        top_all = top_customers_frame(view_df2)
-        st.dataframe(top_all, use_container_width=True, hide_index=True)
-
-        st.markdown("### Last 24 Months Top 30")
-        view_24 = view_df2[(view_df2["Date"] >= start_24) & (view_df2["Date"] <= today)].copy()
-        top_24 = top_customers_frame(view_24)
-        st.dataframe(top_24, use_container_width=True, hide_index=True)
-
-        st.markdown("### Last 12 Months Top 30")
-        view_12 = view_df2[(view_df2["Date"] >= start_12) & (view_df2["Date"] <= today)].copy()
-        top_12 = top_customers_frame(view_12)
-        st.dataframe(top_12, use_container_width=True, hide_index=True)
-
-        st.markdown("### Top 5 Customers With the Biggest Drop: Last 3 Months vs Previous 3 Months")
-        last_3m = view_df2[(view_df2["Date"] > start_3) & (view_df2["Date"] <= today)].copy()
-        prev_3m = view_df2[(view_df2["Date"] > start_6) & (view_df2["Date"] <= start_3)].copy()
-
-        last_3m_sales = last_3m.groupby("Customer Name", as_index=False)["Monthly Sales"].sum()
-        prev_3m_sales = prev_3m.groupby("Customer Name", as_index=False)["Monthly Sales"].sum()
-
-        drop_df = last_3m_sales.merge(prev_3m_sales, on="Customer Name", how="outer", suffixes=("_Last3M", "_Prev3M")).fillna(0)
-        drop_df["Drop Value"] = drop_df["Monthly Sales_Prev3M"] - drop_df["Monthly Sales_Last3M"]
-        drop_df["Drop %"] = drop_df.apply(
-            lambda r: (r["Drop Value"] / r["Monthly Sales_Prev3M"] * 100) if r["Monthly Sales_Prev3M"] > 0 else None,
-            axis=1
+            .head(30)
+            .reset_index(drop=True)
         )
 
-        drop_df = drop_df.sort_values("Drop Value", ascending=False).head(5).reset_index(drop=True)
-        drop_df.insert(0, "Rank", range(1, len(drop_df) + 1))
-
-        drop_df["Monthly Sales_Last3M"] = drop_df["Monthly Sales_Last3M"].apply(fmt_rand)
-        drop_df["Monthly Sales_Prev3M"] = drop_df["Monthly Sales_Prev3M"].apply(fmt_rand)
-        drop_df["Drop Value"] = drop_df["Drop Value"].apply(fmt_rand)
-        drop_df["Drop %"] = drop_df["Drop %"].map(lambda x: f"{x:.2f}%" if pd.notna(x) else "")
-
-        st.dataframe(
-            drop_df[[
-                "Rank",
-                "Customer Name",
-                "Monthly Sales_Prev3M",
-                "Monthly Sales_Last3M",
-                "Drop Value",
-                "Drop %"
-            ]],
-            use_container_width=True,
-            hide_index=True
+        top.insert(
+            0,
+            "Rank",
+            range(1, len(top)+1)
         )
 
-        if not top_all.empty:
-            plot_df = view_df2.groupby("Customer Name", as_index=False)["Monthly Sales"].sum().sort_values("Monthly Sales", ascending=True).tail(30)
-            fig, ax = plt.subplots(figsize=(10, 6))
-            ax.barh(plot_df["Customer Name"], plot_df["Monthly Sales"])
-            ax.set_title("Top Customers")
-            ax.set_xlabel("Rand")
-            ax.tick_params(axis="y", labelsize=8)
-            ax.tick_params(axis="x", labelsize=8)
-            ax.grid(axis="x", alpha=0.25)
-            ax.xaxis.set_major_formatter(FuncFormatter(millions_formatter))
-            ax.xaxis.offsetText.set_visible(False)
-            st.pyplot(fig, clear_figure=True)
-            plt.close(fig)
+        return top
+
+
+    # ------------------------------------------------------
+    # All Time
+    # ------------------------------------------------------
+
+    st.subheader("Top 30 Customers - All Time")
+
+    top_all = top_customers_frame(df)
+
+    display = top_all.copy()
+    display["Monthly Sales"] = display["Monthly Sales"].apply(fmt_rand)
+
+    st.dataframe(
+        display,
+        use_container_width=True,
+        hide_index=True
+    )
+
+
+    # ------------------------------------------------------
+    # Last 24 Months
+    # ------------------------------------------------------
+
+    st.subheader("Top 30 Customers - Last 24 Months")
+
+    last24 = df[
+        (df["Date"] >= start_24) &
+        (df["Date"] <= report_date)
+    ]
+
+    display = top_customers_frame(last24)
+
+    display["Monthly Sales"] = (
+        display["Monthly Sales"]
+        .apply(fmt_rand)
+    )
+
+    st.dataframe(
+        display,
+        use_container_width=True,
+        hide_index=True
+    )
+
+
+    # ------------------------------------------------------
+    # Last 12 Months
+    # ------------------------------------------------------
+
+    st.subheader("Top 30 Customers - Last 12 Months")
+
+    last12 = df[
+        (df["Date"] >= start_12) &
+        (df["Date"] <= report_date)
+    ]
+
+    display = top_customers_frame(last12)
+
+    display["Monthly Sales"] = (
+        display["Monthly Sales"]
+        .apply(fmt_rand)
+    )
+
+    st.dataframe(
+        display,
+        use_container_width=True,
+        hide_index=True
+    )
+
+
+    # ------------------------------------------------------
+    # Biggest Customer Drops
+    # ------------------------------------------------------
+
+    st.subheader(
+        "Top 5 Customer Sales Drops"
+    )
+
+    current3 = df[
+        (df["Date"] > start_3) &
+        (df["Date"] <= report_date)
+    ]
+
+    previous3 = df[
+        (df["Date"] > start_6) &
+        (df["Date"] <= start_3)
+    ]
+
+    cur = (
+        current3
+        .groupby(
+            "Customer Name",
+            as_index=False
+        )
+        ["Monthly Sales"]
+        .sum()
+    )
+
+    prev = (
+        previous3
+        .groupby(
+            "Customer Name",
+            as_index=False
+        )
+        ["Monthly Sales"]
+        .sum()
+    )
+
+    drop = cur.merge(
+        prev,
+        on="Customer Name",
+        how="outer",
+        suffixes=(
+            "_Current",
+            "_Previous"
+        )
+    ).fillna(0)
+
+    drop["Drop Value"] = (
+        drop["Monthly Sales_Previous"]
+        -
+        drop["Monthly Sales_Current"]
+    )
+
+    drop["Drop %"] = drop.apply(
+        lambda r:
+        (
+            r["Drop Value"]
+            /
+            r["Monthly Sales_Previous"]
+            *100
+        )
+        if r["Monthly Sales_Previous"]>0
+        else None,
+        axis=1
+    )
+
+    drop = (
+        drop
+        .sort_values(
+            "Drop Value",
+            ascending=False
+        )
+        .head(5)
+        .reset_index(drop=True)
+    )
+
+    drop.insert(
+        0,
+        "Rank",
+        range(1,len(drop)+1)
+    )
+
+    display = drop.copy()
+
+    display["Monthly Sales_Current"] = (
+        display["Monthly Sales_Current"]
+        .apply(fmt_rand)
+    )
+
+    display["Monthly Sales_Previous"] = (
+        display["Monthly Sales_Previous"]
+        .apply(fmt_rand)
+    )
+
+    display["Drop Value"] = (
+        display["Drop Value"]
+        .apply(fmt_rand)
+    )
+
+    display["Drop %"] = (
+        display["Drop %"]
+        .map(
+            lambda x:
+            f"{x:.1f}%"
+            if pd.notna(x)
+            else ""
+        )
+    )
+
+    st.dataframe(
+        display,
+        use_container_width=True,
+        hide_index=True
+    )
+
+
+    # ------------------------------------------------------
+    # Bar Chart
+    # ------------------------------------------------------
+
+    st.subheader("Top Customers Chart")
+
+    chart = (
+        top_all
+        .sort_values(
+            "Monthly Sales",
+            ascending=True
+        )
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(10,7)
+    )
+
+    ax.barh(
+        chart["Customer Name"],
+        chart["Monthly Sales"]
+    )
+
+    ax.grid(
+        axis="x",
+        alpha=0.3
+    )
+
+    ax.set_xlabel("Sales")
+
+    ax.xaxis.set_major_formatter(
+        FuncFormatter(
+            millions_formatter
+        )
+    )
+
+    st.pyplot(fig)
+
+    plt.close(fig)
+# ==========================================================
+# DATA TAB
+# ==========================================================
 
 with tab3:
-    st.markdown('<div class="section-title">Data File</div>', unsafe_allow_html=True)
-    st.write("Database file loaded from Google Drive.")
-    st.dataframe(money_frame(st.session_state.df), use_container_width=True, hide_index=True)
+
+    st.markdown(
+        '<div class="section-title">Transformer Oil Lab Data</div>',
+        unsafe_allow_html=True
+    )
+
+    st.caption(
+        "Live data loaded from Google Drive"
+    )
+
+    display = df.copy()
+
+    display["Monthly Sales"] = (
+        display["Monthly Sales"]
+        .apply(fmt_rand)
+    )
+
+    display = display.sort_values(
+        "Date",
+        ascending=False
+    )
+
+    st.dataframe(
+        display,
+        use_container_width=True,
+        hide_index=True
+    )
+
+
+# ==========================================================
+# DASHBOARD SUMMARY
+# ==========================================================
 
 st.markdown("---")
-st.caption("All amounts displayed in Rand.")
+
+left,right = st.columns(2)
+
+with left:
+
+    st.metric(
+        "Records Loaded",
+        f"{len(df):,}"
+    )
+
+with right:
+
+    st.metric(
+        "Customers",
+        f"{df['Customer Name'].nunique():,}"
+    )
+
+
+# ==========================================================
+# FOOTER
+# ==========================================================
+
+st.markdown("---")
+
+st.caption(
+    f"""
+Transformer Oil Lab Financial Dashboard
+
+Reporting Month:
+{report_month.strftime('%B %Y')}
+
+Generated:
+{datetime.now().strftime('%d %B %Y %H:%M')}
+"""
+)
