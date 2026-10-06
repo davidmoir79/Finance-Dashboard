@@ -57,6 +57,7 @@ st.markdown(
 
 FILE_ID = "1KEbgg2u3FSMRIMcrEBTDeYW0qzTnpICH"
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+SAMPLES_FILE = "samples_data.csv"
 
 # Only Transformer Oil Lab
 TRANSFORMER_CODES = ["TFM", "Transformer Oil Lab", "Oilwatch Lubricating Laboratory"]
@@ -113,7 +114,7 @@ def clean_sales(value):
         parts = s.split(".")
         if len(parts[-1]) == 3 and all(p.isdigit() for p in parts):
             s = "".join(parts)
-            
+
     try:
         val = float(s) * mult
         return -val if is_negative else val
@@ -189,6 +190,19 @@ def load_data_from_drive():
 
     df = df[["Date", "Monthly Sales", "Company", "Customer Name"]]
     return df.dropna(subset=["Date"])
+
+@st.cache_data(ttl=600)
+def load_samples():
+    if not os.path.exists(SAMPLES_FILE):
+        return pd.DataFrame(columns=["Date", "Samples", "Year", "MonthNum"])
+    df = pd.read_csv(SAMPLES_FILE)
+    df.columns = [c.strip() for c in df.columns]
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df["Samples"] = pd.to_numeric(df["Samples"], errors="coerce").fillna(0)
+    df = df.dropna(subset=["Date"])
+    df["Year"] = df["Date"].dt.year
+    df["MonthNum"] = df["Date"].dt.month
+    return df
 
 def money_frame(df):
     out = df.copy()
@@ -340,12 +354,86 @@ def show_grouped_bar_last_3_years(comp_df, title):
     st.pyplot(fig, clear_figure=True)
     plt.close(fig)
 
+# ---------------- Samples charts ----------------
+
+def plot_samples_monthly_last_3_years(df):
+    latest_year = int(df["Year"].max())
+    filtered = df[df["Year"].isin([latest_year - 2, latest_year - 1, latest_year])]
+    monthly = filtered.groupby(["MonthNum", "Year"], as_index=False)["Samples"].sum()
+    pivot = monthly.pivot(index="MonthNum", columns="Year", values="Samples").reindex(range(1, 13))
+    pivot.index = [MONTH_MAP[i] for i in pivot.index]
+
+    fig, ax = plt.subplots(figsize=(11, 4))
+    pivot.plot(kind="bar", ax=ax, width=0.85)
+    ax.set_title("Samples Received per Month - Last 3 Years", fontsize=11)
+    ax.set_xlabel("Month", fontsize=9)
+    ax.set_ylabel("Number of Samples", fontsize=9)
+    ax.tick_params(axis="both", labelsize=8)
+    ax.legend(fontsize=8)
+    ax.grid(axis="y", alpha=0.2)
+    st.pyplot(fig, clear_figure=True)
+    plt.close(fig)
+
+def plot_samples_yearly_average(df):
+    # Ignore months with 0 samples so a month with no data (e.g. Jan 2019) doesn't drag the average down
+    valid = df[df["Samples"] > 0]
+    yearly_avg = (
+        valid.groupby("Year", as_index=False)
+        .agg(Total_Samples=("Samples", "sum"), Months_With_Data=("MonthNum", "nunique"))
+        .sort_values("Year")
+    )
+    yearly_avg["Average_Monthly_Samples"] = yearly_avg["Total_Samples"] / yearly_avg["Months_With_Data"]
+
+    fig, ax = plt.subplots(figsize=(9, 3.5))
+    ax.plot(yearly_avg["Year"], yearly_avg["Average_Monthly_Samples"],
+            marker="o", linewidth=2, color="#d62728")
+    ax.set_title("Yearly Average Monthly Samples", fontsize=11)
+    ax.set_xlabel("Year", fontsize=9)
+    ax.set_ylabel("Average Samples per Month", fontsize=9)
+    ax.tick_params(axis="both", labelsize=8)
+    ax.grid(True, alpha=0.25)
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    ax.set_ylim(bottom=0)
+
+    for x, y in zip(yearly_avg["Year"], yearly_avg["Average_Monthly_Samples"]):
+        ax.annotate(f"{y:,.0f}", (x, y), textcoords="offset points",
+                    xytext=(0, 8), ha="center", fontsize=8)
+
+    st.pyplot(fig, clear_figure=True)
+    plt.close(fig)
+
+    display = yearly_avg.copy()
+    display["Average_Monthly_Samples"] = display["Average_Monthly_Samples"].round(0).astype(int)
+    st.dataframe(display[["Year", "Total_Samples", "Months_With_Data", "Average_Monthly_Samples"]],
+                 use_container_width=True, hide_index=True)
+
+def plot_samples_yearly(df):
+    yearly = df.groupby("Year", as_index=False)["Samples"].sum().sort_values("Year")
+
+    fig, ax = plt.subplots(figsize=(9, 3.5))
+    ax.plot(yearly["Year"], yearly["Samples"], marker="o", linewidth=2, color="#9467bd")
+    ax.set_title("Yearly Total Samples", fontsize=11)
+    ax.set_xlabel("Year", fontsize=9)
+    ax.set_ylabel("Number of Samples", fontsize=9)
+    ax.tick_params(axis="both", labelsize=8)
+    ax.grid(True, alpha=0.25)
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    for x, y in zip(yearly["Year"], yearly["Samples"]):
+        ax.annotate(f"{int(y):,}", (x, y), textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8)
+    st.pyplot(fig, clear_figure=True)
+    plt.close(fig)
+
+    st.dataframe(yearly.assign(Samples=yearly["Samples"].astype(int)),
+                 use_container_width=True, hide_index=True)
+
+# ---------------- App ----------------
+
 if "df" not in st.session_state:
     st.session_state.df = load_data_from_drive()
 
 st.sidebar.success(f"Rows loaded: {len(st.session_state.df)}")
 
-tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "🏆 Top Customers", "📁 Data"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🏆 Top Customers", "🧪 Samples", "📁 Data"])
 
 with tab1:
     st.markdown('<div class="section-title">Dashboard</div>', unsafe_allow_html=True)
@@ -353,10 +441,10 @@ with tab1:
         st.info("No data loaded.")
     else:
         df = st.session_state.df.copy()
-        
+
         # Filter to Transformer Oil Lab only
         df = df[df["Company"].isin(TRANSFORMER_CODES)].copy()
-        
+
         df["Year"] = df["Date"].dt.year
         df["MonthNum"] = df["Date"].dt.month
         df["Month"] = df["Date"].dt.strftime("%b")
@@ -490,6 +578,20 @@ with tab2:
             plt.close(fig)
 
 with tab3:
+    st.markdown('<div class="section-title">Samples Through the Lab</div>', unsafe_allow_html=True)
+    samples_df = load_samples()
+    if samples_df.empty:
+        st.info("No samples data found. Add samples_data.csv to the repository.")
+    else:
+        plot_samples_monthly_last_3_years(samples_df)
+
+        st.markdown('<div class="section-title">Yearly Average Monthly Samples</div>', unsafe_allow_html=True)
+        plot_samples_yearly_average(samples_df)
+
+        st.markdown('<div class="section-title">Yearly Total Samples</div>', unsafe_allow_html=True)
+        plot_samples_yearly(samples_df)
+
+with tab4:
     st.markdown('<div class="section-title">Data File</div>', unsafe_allow_html=True)
     st.write("Database file loaded from Google Drive - Transformer Oil Lab only.")
     filtered_data = st.session_state.df[st.session_state.df["Company"].isin(TRANSFORMER_CODES)].copy()
